@@ -1,0 +1,161 @@
+import os
+import subprocess
+from datetime import datetime
+
+# 获取带时间戳的日志文件路径
+def get_timestamped_log_file_path(base_path):
+    # 获取当前时间并格式化为字符串（年-月-日-时-分-秒）
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    # 返回带有时间戳的日志文件路径
+    return f"{base_path}_{timestamp}.txt"
+
+# 转义路径中的特殊字符
+def escape_special_chars(path):
+    # 转义括号和空格，避免在命令行中解析错误
+    return path.replace("(", "\\(").replace(")", "\\)").replace(" ", "\\ ")
+
+# 获取文件大小
+def get_file_size(file_path):
+    """获取文件大小"""
+    # 运行 ADB 命令获取文件大小，%s 格式化符号表示文件大小
+    result = subprocess.run(["adb", "shell", f"stat -c %s {file_path}"], text=True, capture_output=True)
+    if result.returncode == 0:
+        # 成功时返回文件大小（以字节为单位）
+        return int(result.stdout.strip())
+    else:
+        # 失败时返回 0
+        return 0
+
+# 复制文件并记录日志
+def copy_files_with_adb(source_folder, destination_folder, log_file, file_limit):
+    try:
+        # 获取文件列表
+        print(f"Running command: adb shell ls {source_folder}")
+        # 运行 ADB 命令列出源文件夹中的文件
+        result = subprocess.run(["adb", "shell", "ls", source_folder], check=True, text=True, capture_output=True)
+        if result.returncode != 0:
+            # 如果列出文件失败，打印错误信息并返回
+            print(f"Error listing files: {result.stderr}")
+            return 0, 0, []
+
+        # 获取文件列表
+        files = result.stdout.splitlines()
+
+        # 初始化计数器
+        file_count = 0
+        success_count = 0
+        failed_files = []
+        total_size = 0
+
+        for file_name in files:
+            if file_count >= file_limit:
+                # 达到文件限制时停止
+                break
+
+            # 构建源文件路径和目标文件路径
+            source_path = f"{source_folder}/{file_name}".replace('\\', '/')
+            destination_path = os.path.join(destination_folder, file_name)
+
+            if not os.path.exists(destination_folder):
+                # 如果目标文件夹不存在，创建文件夹
+                os.makedirs(destination_folder)
+
+            # 获取源文件的时间戳
+            escaped_source_path = escape_special_chars(source_path)
+            timestamp_command = f"stat -c %Y {escaped_source_path}"
+            print(f"Running command: adb shell \"{timestamp_command}\"")  # 打印调试信息
+            timestamp_result = subprocess.run(["adb", "shell", timestamp_command], shell=True, text=True, capture_output=True)
+            if timestamp_result.returncode != 0:
+                # 获取时间戳失败，记录日志并继续处理下一个文件
+                print(f"Failed to get timestamp for: {source_path}")
+                log_file.write(f"Failed to get timestamp for: {file_name}\n")
+                log_file.write(f"Error: {timestamp_result.stderr}\n")
+                failed_files.append(file_name)
+                continue
+
+            # 使用 adb pull 命令复制文件
+            print(f"Running command: adb pull {source_path} {destination_path}")  # 打印调试信息
+            copy_result = subprocess.run(["adb", "pull", source_path, destination_path], text=True, capture_output=True)
+            if copy_result.returncode == 0:
+                # 复制成功
+                print(f"Successfully copied: {file_name}")
+                # 设置文件的修改时间
+                timestamp = int(timestamp_result.stdout.strip())
+                os.utime(destination_path, (timestamp, timestamp))
+
+                # 获取文件大小并累加到总大小
+                file_size = get_file_size(escaped_source_path)
+                total_size += file_size
+
+                if delete_image(source_path):
+                    # 复制并删除成功，记录日志
+                    log_file.write(f"Copied and deleted: {file_name} ({file_size} bytes)\n")
+                    success_count += 1
+                else:
+                    # 复制成功但删除失败，记录日志
+                    log_file.write(f"Copied but failed to delete: {file_name} ({file_size} bytes)\n")
+                    failed_files.append(file_name)
+            else:
+                # 复制失败，记录日志
+                print(f"Failed to copy: {file_name}")
+                log_file.write(f"Failed to copy: {file_name}\n")
+                log_file.write(f"Error: {copy_result.stderr}\n")
+                failed_files.append(file_name)
+
+            file_count += 1
+
+        # 返回成功计数、总大小和失败文件列表
+        return success_count, total_size, failed_files
+    except subprocess.CalledProcessError as e:
+        # 捕获子进程错误，打印错误信息并返回
+        print(f"Error during ADB operation: {e}")
+        return 0, 0, []
+
+# 删除文件
+def delete_image(device_path):
+    try:
+        # 使用转义字符处理路径中的特殊字符
+        escaped_path = escape_special_chars(device_path)
+        delete_command = f"rm {escaped_path}"
+        print(f"Running command: adb shell \"{delete_command}\"")  # 打印调试信息
+        result = subprocess.run(["adb", "shell", delete_command], shell=True, text=True, capture_output=True)
+        if result.returncode == 0:
+            # 删除成功
+            print("Image deleted successfully")
+            return True
+        else:
+            # 删除失败，打印错误信息
+            print(f"Failed to delete image: {result.stderr}")
+            return False
+    except subprocess.CalledProcessError as e:
+        # 捕获子进程错误，打印错误信息
+        print(f"Failed to delete image: {e}")
+        return False
+
+# 指定设备上的文件夹路径和本地目标文件夹路径
+source_folder = "/sdcard/DCIM/Screenshots"
+destination_folder = r"D:/2024年8月6日 手机截图图片"
+log_file_base_path = r"D:/2024年8月6日 手机截图图片/复制日志"
+file_limit = 1000  # 一次迁移的最大文件数量
+
+# 获取带时间戳的日志文件路径
+log_file_path = get_timestamped_log_file_path(log_file_base_path)
+
+# 打开日志文件
+with open(log_file_path, 'a', encoding='utf-8') as log_file:
+    # 复制文件并记录日志
+    success_count, total_size, failed_files = copy_files_with_adb(source_folder, destination_folder, log_file, file_limit)
+
+# 计算成功率
+actual_limit = success_count + len(failed_files)  # 实际处理的文件数，包括成功和失败的
+success_rate = (success_count / actual_limit) * 100 if actual_limit > 0 else 0
+
+# 打印结果
+print(f"日志文件路径: {log_file_path}")
+print(f"文件夹中共有 {success_count} 个文件被成功复制并删除")
+print(f"成功率: {success_rate}%")
+print(f"总共迁移的文件大小: {total_size / (1024 * 1024):.2f} MB")
+if failed_files:
+    print("以下文件复制或删除失败:")
+    for failed_file in failed_files:
+        print(failed_file)
