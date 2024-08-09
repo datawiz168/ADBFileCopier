@@ -51,6 +51,10 @@ ADB模式下海量手机图片文件迁移到电脑
 
 通过以上步骤，您就可以成功下载、安装和使用 ADB 进行安卓设备的调试和管理。
 
+效果图
+![image](https://github.com/user-attachments/assets/53ff5236-132d-4f25-b232-1fe585624cd1)
+
+
 Citations:
 [1] https://developer.android.com/tools/adb
 [2] https://blog.csdn.net/weixin_44903147/article/details/104065844
